@@ -19,7 +19,7 @@ class Chat implements MessageComponentInterface {
         $token = $conn->httpRequest->getUri()->getQuery();
 
         // find user by token
-        $user = User::query()->where(['remember_token'=>$token])->first();
+        $user = User::query()->where(['token'=>$token])->first();
 
         // check user status
         if (!$user || $user->state === User::STATUS_BANNED){
@@ -77,7 +77,7 @@ class Chat implements MessageComponentInterface {
             case 'message':
                 // save message to db
                 // check for 15 sec timeout
-
+                echo($data['text']);
                 if ($from->user->mute === User::MUTE_ON || empty($data['text'])){
                     return false;
                 }

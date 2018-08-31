@@ -45,7 +45,7 @@
             <ul class="list-group">
                 <li class="list-group-item user-list-item">
                     <img src="2.jpg">
-                    <span>Nick name4</span>
+                    <span style="color: #ef5350">Nick name4</span>
                     <div class="operations">
                         <i class="material-icons">volume_off</i>
                         <i class="material-icons">close</i>
@@ -76,16 +76,16 @@
             <div class="text">
                 Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Aenean commodo ligula eget dolor. Aenean massa. Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. Donec qu
             </div>
-            <span class="name">
-                Name
+            <span class="name" style="color: #DCE775">
+                Name SecondName
             </span>
             <img class="user-avatar" src="1.jpg">
         </div>
     </div>
 
     <div class="message-input d-flex flex-row">
-        <input type="text" class="form-control" maxlength="200" placeholder="Сообщение" aria-label="Сообщение" aria-describedby="basic-addon2">
-        <button class="btn btn-outline-secondary" type="button">Отправить</button>
+        <input type="text" class="form-control" maxlength="200" placeholder="Сообщение" aria-label="Сообщение" aria-describedby="basic-addon2" v-model="input">
+        <button class="btn btn-outline-secondary" type="button" @click="clickButton">Отправить</button>
     </div>
 
     <div class="fogging"></div>
