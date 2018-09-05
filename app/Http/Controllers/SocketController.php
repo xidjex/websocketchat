@@ -14,27 +14,36 @@ class Chat implements MessageComponentInterface {
         $this->clients = new \SplObjectStorage;
     }
 
-    public function onOpen(ConnectionInterface $conn) {
+    public function onOpen(ConnectionInterface $connection) {
 
-        $token = $conn->httpRequest->getUri()->getQuery();
+        $token = $connection->httpRequest->getUri()->getQuery(); //get user token from URI
 
-        // find user by token
-        $user = User::query()->where(['token'=>$token])->first();
+        $user = User::where('token',$token)->first();  // find user by token
 
-        // check user status
-        if (!$user || $user->state === User::STATUS_BANNED){
-            $conn->close();
+        if (!$user || $user->state === User::STATUS_BANNED){  // check user status
+            $connection->send(json_encode(['type' => 'banned']));
+            $connection->close();
         }
 
-        // save current connection to user property
-        $conn->user = $user;
+        $connection->user = $user; // save current connection to user property
 
-        // Store the new connection to send messages to later
-        $this->clients->attach($conn);
+        $this->sendToAll([
+            'type' => 'connect-user',
+            'user' => $user->toArray()
+        ]);
 
-        $this->sendUserList();
+        $this->clients->attach($connection); // Store the new connection to send messages later
 
-        echo "New connection! {$user->name} ({$conn->resourceId})\n";
+        //Send last messages, online users and current user data to logged in user
+        $data['usersOnline'] = $this->getConnectedUsers();
+        $data['currentUser'] = $user->toArray();
+        $data['messages'] = array_reverse(Message::orderBy('created_at', 'DESC')->take(config('chat.startupMessagesCount'))->with('user')->get()->toArray());
+        $data['type'] = 'startup';
+        if ($user->isAdmin) $data['users'] = User::all();
+
+        $connection->send(json_encode($data));
+
+        echo "New connection! {$user->name} ({$connection->resourceId})\n";
     }
 
     public function onMessage(ConnectionInterface $from, $msg) {
@@ -68,24 +77,25 @@ class Chat implements MessageComponentInterface {
         $data = json_decode($msg, true);
         echo 'Message: ' . $msg . PHP_EOL;
 
-        if (!$data || empty($data['type'])){
+        if (!$data || empty($data['type'])){ // Break if message data invalid
             return;
         }
 
 
         switch($data['type']){
             case 'message':
-                // save message to db
                 // check for 15 sec timeout
                 echo($data['text']);
                 if ($from->user->mute === User::MUTE_ON || empty($data['text'])){
                     return false;
                 }
 
+                if (config('chat.saveInDb')) Message::create(['text' => $data['text'], 'user_id' => $from->user->id]); // Save message to db
+
                 $this->sendToAll([
                     'type'=>'message',
                     'text' => $data['text'],
-                    'user'=> $from->user->name
+                    'user'=> $from->user
                 ]);
 
                 break;
@@ -96,11 +106,13 @@ class Chat implements MessageComponentInterface {
                     return false;
                 }
 
+                $this->updateUserData((int)$data['id'], 'state', USER::STATUS_BANNED);
+
                 User::query()->where(['id'=> $data['id']])->update(['state'=>User::STATUS_BANNED]);
 
                 $this->sendToAll([
                     'type'=>'ban',
-                    'user'=> $from->user->name
+                    'id'=> $data['id']
                 ]);
 
                 break;
@@ -110,11 +122,13 @@ class Chat implements MessageComponentInterface {
                     return false;
                 }
 
+                $this->updateUserData((int)$data['id'], 'state', USER::STATUS_ACTIVE);
+
                 User::query()->where(['id'=> $data['id']])->update(['state'=>User::STATUS_ACTIVE]);
 
                 $this->sendToAll([
                     'type'=>'unban',
-                    'user'=> $from->user->name
+                    'id'=> $data['id']
                 ]);
                 break;
 
@@ -123,11 +137,13 @@ class Chat implements MessageComponentInterface {
                     return false;
                 }
 
+                $this->updateUserData((int)$data['id'], 'mute', USER::MUTE_ON);
+
                 User::query()->where(['id'=> $data['id']])->update(['mute'=>User::MUTE_ON]);
 
                 $this->sendToAll([
                     'type'=>'mute',
-                    'user'=> $from->user->name
+                    'id'=> $data['id']
                 ]);
 
                 break;
@@ -137,11 +153,13 @@ class Chat implements MessageComponentInterface {
                     return false;
                 }
 
+                $this->updateUserData((int)$data['id'], 'mute', USER::MUTE_OFF);
+
                 User::query()->where(['id'=> $data['id']])->update(['mute'=>User::MUTE_OFF]);
 
                 $this->sendToAll([
                     'type'=>'unmute',
-                    'user'=> $from->user->name
+                    'id'=> $data['id']
                 ]);
 
                 break;
@@ -150,13 +168,19 @@ class Chat implements MessageComponentInterface {
 
     }
 
-    public function onClose(ConnectionInterface $conn) {
+    public function onClose(ConnectionInterface $connection) {
         // The connection is closed, remove it, as we can no longer send it messages
-        $this->clients->detach($conn);
 
-        $this->sendUserList();
+        $user = $connection->user;
 
-        echo "Connection {$conn->resourceId} has disconnected\n";
+        $this->clients->detach($connection);
+
+        $this->sendToAll([
+           'type' => 'disconnect-user',
+           'user' => $user->toArray()
+        ]);
+
+        echo "Connection {$connection->resourceId} has disconnected\n";
     }
 
     public function onError(ConnectionInterface $conn, \Exception $e) {
@@ -165,22 +189,27 @@ class Chat implements MessageComponentInterface {
         $conn->close();
     }
 
-    public function sendUserList(){
-
-        $list = [];
+    private function getConnectedUsers() {
+        $users = [];
         foreach ($this->clients as $client) {
-            $list[]=$client->user->name;
+            $users[]= $client->user->toArray();
         }
 
-        $this->sendToAll([
-            'type'=>'online',
-            'list'=> $list
-        ]);
+        return $users;
     }
 
     public function sendToAll($data){
         foreach ($this->clients as $client) {
             $client->send(json_encode($data));
+        }
+    }
+
+    public function updateUserData($id, $attribute, $data) {
+        foreach ($this->clients as $client) {
+            if ($client->user->id === $id) {
+                $client->user->{$attribute} = $data;
+                return;
+            }
         }
     }
 }
